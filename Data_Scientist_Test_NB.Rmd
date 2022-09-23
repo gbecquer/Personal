@@ -1,0 +1,161 @@
+## Lendrock Data Scientist Test
+
+Esquema de como estructurar el Notebook
+
+- En primer lugar hacer un breve resumen del proyecto a realizar (Loan Default).
+- Hablar de la variable objetivo y ver en alguna Gráfica (Barras) como es su distribución, hablar del desbalanceo de esta variable entre sus dos posibles outputs y dejar para más adelante la resolución de este problema con diferentes opciones (Upsampling, Downsampling).
+- Empezar a visualizar los datos y realizar un análisis exploratorio de los mismos. 
+- Hacer una tabla recogiendo todas las variables y dando una breve descripción de cada una de ellas.
+- Visualizar los missing values (En principio solo en la variable Employment Type) barajar que podemos hacer con ellos, que signifiquen que el usuario esta Desempleado o eliminar dichas observaciones de los datos ya que tampoco se corresponden a un gran porcentaje de los datos.
+- Transformar las variables de tipo String (O factores o fechas), en el caso de las fechas ver que información nos pueden aportar y como transformar dicha fecha a un valor númerico o categórico.
+- Visualizar outliers de las variables y ver cuales deberian ser eliminados (Age).
+
+Modelos
+- Hacer una particón de los datos para dejar una parte sin modificar y realizar todo el pipeline que se realizaría con unos datos nuevos para realizar las predicciones. Con el resto de datos hacer una partición TR/TS para entrenar los modelos y buscar el que mejor se adapta a nuestro caso.
+- Con la parte que nos hemos quedado para TR/TS lo primero que vamos a tener que hacer es solucionar el desbalanceo de la clase objetivo, probar con up y down para ver con cual obtenemos los mejores resultados en el TS y decidirnos por esa solución (buscar más soluciones para mejorar este problema). Comprobar la proporcion de la clase objetivo para la parte reservada para la predicción final, para TR y TS, ver que las proporciones son similares (78-22 / 50-50).
+- Una vez tenemos los datos listos para los modelos se va a probar con varios modelos (Log Reg, Tree, RF, GB, SVM, XGB) para ver con cuales obtenemos los mejores resultados. Mostrar en una gráfica una comparativa de las métricas más interesantes para demostrar visualmente el porque nos vamos a quedar con uno de ellos. Argumentar de todas las métricas para clasificación cuales van a ser las mejroes para nuestro caso (puede ser más interesante detectar un fraude que perder 3 clientes)(como tampoco conozco temas de como afectaría esto a posible fidelidad, igual luego los clientes vuelven a realizar muchas compras, pero al ser para coches que suelen durar bastante tiempo hasta que son cambiados, puede que los usuarios pocas veces hagan más de 1 compra con nuestro préstamo, sería interesante añadir esta reflexión para elegir la métrica que considero más interesante, añadir que no tengo los datos para poder saber realmente las pérdidas que podría acarrear decir que no a un cliente que iba a devolver correctamente el pago).
+- En ese modelo nos vamos a centrar en hacer una buena selección de las variables y tunear los parámetros con un tune grid más amplio.
+- Mostrar finalmente las métricas y gráficas para el modelo con el que nos vamos a quedar y con el que vamos a realizar las predicciones de los datos 'reales'.
+
+
+- Conclusiones. Todos los pasos importantes que se han realizado en el proyecto (eliminar missing values y outliers que no tienen sentido), transformar algunas variables del DF para que aporten más valor al modelo, balancear la variable a predecir para poder realizar un modelo más robusto, buscar el modelo predictivo de clasificación que mejor se adapta a predecir nuestros datos y tunear sus hiperparámetros para realizar una mejor predicción, TR/TS split y CV para poder disminuir el overfitting y conseguir unos mejores resultados, hacer una buena selección de variables a introducir en el modelo para obtener mejores resultados. Por último con una parte del dataset reservada para testear como esta funcionando realmente nuestra solución (datos que no han participado en el entrenamiento y haciendo de datos nuevos reales).
+
+
+
+
+El primer paso que vamos a realizar es cargar todas las librerias necesarias para este código.
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(corrplot)
+library(GGally)
+library(visdat)
+library(caret)
+```
+
+
+En siguiente lugar vamos a fijar nuestro directorio de trabajo donde tenemos los datos de este problema
+
+
+```{r}
+setwd("../../Documents/Lendrock")
+getwd()
+```
+A continuación vamos a leer los datos y ver un breve resumen de como son. Ver los tipos en los que aparece cada una de las variables y las distribuciones de sus valores en caso de ser numéricas.
+
+
+```{r}
+data <- readRDS(file = "loan_dataset.RDS")
+str(data)
+summary(data)
+```
+
+Comentar un poco que significa cada variable, hablar de que buscando en internet se ha llegado a la conclusión de que estos datos pertenecen a la India, por lo tanto los valores de precios que parecen un poco desorbitados al hacer el cambio de moneda si que tienen más sentido.
+
+
+NA
+
+```{r}
+
+sapply(data, function(x) sum(is.na(x)))
+
+vis_miss(data, warn_large_data = FALSE)
+
+(sum(!complete.cases(data)) / nrow(data) ) * 100
+
+```
+
+
+Solo hemos visto NA en una columna de nuestro DF, en concreto Employment Type. Viendo donde estan localizados estos NA dentro del DF vemos que estan situados de forma aleatoria, por lo tanto vamos a ver que hacemos con ellos, si tiene sentido mantener estas rows asignando algún valor para esos NA o si es mejor eliminar estas observaciones.
+
+
+```{r}
+
+data[["Employment.Type"]][is.na(data[["Employment.Type"]])] <- "NA"
+
+(sum(!complete.cases(data)) / nrow(data) ) * 100
+
+
+```
+
+
+
+```{r}
+
+data_na <- data[data$Employment.Type == "NA",]
+
+ggplot(data_na, aes(x = loan_default)) + 
+  geom_bar()
+
+prop.table(table(data_na$loan_default))
+
+```
+Como podemos ver la proporción de la variable salida es casi idéntica que la del dataframe completo por lo que viendo que además estas observaciones con NA representan muy poca parte del total de los datos, la decisión que se ha tomado ha isdo eliminar estas rows.
+
+
+
+## EDA
+
+Una vez hemos realizado los primeros pasos para tener nuestros datos correctamente vamos a pasar a un primer análisis exploratorio de dichos datos. En este análisis vamos a ver si tenemos NA, ver como son las distribuciones de cada una de las variables y como se relacionan con la variable objetivo (Loan Default), visualizar los outliers y entender correctamente que es lo que significa cada una de las variables de las que disponemos para este problema.
+
+Loan Default
+
+Esta variable es la que marca si un cliente ha incumplido el pago del préstamo o no. Va a ser la variable que vamos a querer predecir con el modelo de clasificación para poder realizar las futuros predicciones de si un futuro cliente va a caer también en impago. Los valores que va a tomar esta variable son 0 o 1, lo que implica si ha realizado correctamente el pago o no.
+
+Como análisis preliminar va a ser interesante saber la proporción de ambos valores de salida, saber si esta balanceada dicha variable o si por el contrario uno de los dos valores es más propicio a ocurrir.
+
+```{r}
+ggplot(data, aes(x = loan_default)) + 
+  geom_bar()
+
+
+```
+
+En concreto la proporción de cada uno de los factores es la siguiente:
+
+```{r}
+
+prop.table(table(data$loan_default))
+
+```
+
+Crear una nueva variable que sea la suma de todas las flags para ver si visualmente en esas si que se puede observar algún patrón respecto a la salida.
+
+Hacer la proporcion de cada una de ellas, respecto a su total.
+
+
+
+Gráficos interesantes para mostrar de cada una de las variables del dataset. Para variables continuas el gráfico que mejor muestra si hay diferentes patrones de comportamiento en esa variable parace ser el geom_density, además para que este gráfico se visualice mejor es recomendable ver primero en un boxplot a partir de que valor aparecen los outliers y filtrarlos para el gráfico de densidad. Para las variables discretas parece más interesante visualizar un geom_bar mostrando los porcentajes de la variable salida para cada uno de los factores. Para las variables que son discretas pero tienen demasiados factores puede ser interesante, en vez de realizar gráficos en los que realmente no se va a poder bien si hay patrones útiles, calcular el porcentaje en cada uno de estos factores de si se comete fraude o no y luego representar en un gráfico como de similares o diferentes son estos porcentajes. 
+
+Variables continuas interesantes:
+
+Disbursed Amount: en el gráfico de densidad se puede ver como los patrones resultantes en función de si el prestamo se ha devuelto correctamente o no son un poco diferentes, a medida que el préstamo es de mayor valor parece que aumenta un poco el fraude.
+
+LTV: para esta variable se puede sacar una conclusión bastante similar a la anterior, cuando el porcentaje es más bajo, es decir, que la cantidad de dinero prestado comparado con el precio del coche es más bajo el porcentaje de pagos completados es mayor, mientras que cuando el valor de este ratio es mayor el porcentaje de impagos es superior al de pagos completados.
+
+Age: esta variable ha sido creada con la fecha de nacimiento de cada usuario, hay varias cosas interesantes para esta variable, por un lado se puede ver que se han creado bastantes fechas negativas, al comprobar la fecha de nacimiento de estas observaciones vemos que efectivamente son fechas erroneas superiores a la actual. Por otro lado podemos observar como hay un patrón interesante en estos valores, se ve que cuanto menor es la edad del usuario mayor es la probabilidad de fraude y que cuanto más mayor es menor es su probabilidad.
+
+
+Variables discretas interesantes:
+
+
+
+
+
+
+
+
+Modelos
+
+El primer problema que encontramos es que la clase que queremos predecir está desbalanceada. Para ello vamos a tener que buscar una manera de solucionar este problema. Las soluciones más sencillas que se han realizado han sido por un lado disminuir el tamaño del dataset (cogiiendo todas las observaciones con el valor 1 y de forma aleatoria quedandonos con el mismo valor de 0 que las anteriores), la otra forma es hacerlo justo al contrario, en vez de reducir el tamaño del dataset aumentarlo, cogiendo de entre las variables con la clase = 1 observaciones aleatorias para llegar al mismo número de estas que de 0.
+
+La primera parte la he hecho calculando la proporcion y filtrando igual que al crear la particion TR / TS, reduciendo los 0 hasta ser el mismo numero que los 1.
+
+Para la segunda opcion la idea sería usar: sample(x, 15, replace=TRUE)
+
+
+
+Pruebas
+
+Para la variable PERFORM_CNS.SCORE, filtrar por las distintas descripciones y ver cuantos valores quedan, verlas prop table para estos casos y si hay algo de info que pueda ser relevante, si no pues utilizamos solo la variable de la descripcion.
